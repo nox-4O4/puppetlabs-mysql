@@ -26,6 +26,7 @@ Puppet::Type.type(:mysql_user).provide(:mysql, parent: Puppet::Provider::Mysql) 
       x509_issuer, x509_subject, @password, @plugin, @authentication_string = mysql_caller(query, 'regular').chomp.split(%r{\t})
       @tls_options = parse_tls_options(ssl_type, ssl_cipher, x509_issuer, x509_subject)
       if (newer_than('mariadb' => '10.1.21') && (@plugin == 'ed25519' || @plugin == 'mysql_native_password')) ||
+         (newer_than('mariadb' => '11.6') && (@plugin == 'parsec')) ||
          (newer_than('mariadb' => '10.2.16') && older_than('mariadb' => '10.2.19')) ||
          (newer_than('mariadb' => '10.3.8') && older_than('mariadb' => '10.3.11'))
         # Some auth plugins (e.g. ed25519) use authentication_string
@@ -145,16 +146,18 @@ Puppet::Type.type(:mysql_user).provide(:mysql, parent: Puppet::Provider::Mysql) 
     plugin = @resource.value(:plugin)
 
     # We have a fact for the mysql version ...
-    if !mysqld_version.nil? && newer_than('mariadb' => '10.1.21') && plugin == 'ed25519'
-      raise ArgumentError, _('ed25519 hash should be 43 bytes long.') unless string.length == 43
+    if (!mysqld_version.nil? && newer_than('mariadb' => '10.1.21') && plugin == 'ed25519') ||
+       (!mysqld_version.nil? && newer_than('mariadb' => '11.6') && plugin == 'parsec')
+      raise ArgumentError, _('ed25519 hash should be 43 bytes long.') unless string.length == 43 or plugin != 'ed25519'
+      raise ArgumentError, _('parsec hash should be 71 bytes long.') unless string.length == 71 or plugin != 'parsec'
 
       # ALTER USER statement is only available upstream starting 10.2
       # https://mariadb.com/kb/en/mariadb-1020-release-notes/
       if newer_than('mariadb' => '10.2.0')
-        sql = "ALTER USER #{merged_name} IDENTIFIED WITH ed25519 AS '#{string}'"
+        sql = "ALTER USER #{merged_name} IDENTIFIED WITH #{plugin} AS '#{string}'"
       else
         concat_name = @resource[:name]
-        sql = "UPDATE mysql.user SET password = '', plugin = 'ed25519'"
+        sql = "UPDATE mysql.user SET password = '', plugin = '#{plugin}'"
         sql += ", authentication_string = '#{string}'"
         sql += " where CONCAT(user, '@', host) = '#{concat_name}'; FLUSH PRIVILEGES"
       end
@@ -223,6 +226,8 @@ Puppet::Type.type(:mysql_user).provide(:mysql, parent: Puppet::Provider::Mysql) 
         sql += ", authentication_string = '#{@resource[:password_hash]}'"
         sql += " where CONCAT(user, '@', host) = '#{concat_name}'; FLUSH PRIVILEGES"
       end
+    elsif newer_than('mariadb' => '11.6') && string == 'parsec'
+      sql = "ALTER USER #{merged_name} IDENTIFIED WITH '#{string}' AS '#{@resource[:password_hash]}'"
     elsif newer_than('mysql' => '5.7.6', 'percona' => '5.7.6', 'mariadb' => '10.2.0')
       sql = "ALTER USER #{merged_name} IDENTIFIED WITH '#{string}'"
       sql += " AS '#{@resource[:password_hash]}'" if string == 'mysql_native_password'
