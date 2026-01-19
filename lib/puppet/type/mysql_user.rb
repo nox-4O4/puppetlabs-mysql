@@ -66,6 +66,15 @@ Puppet::Type.newtype(:mysql_user) do
   newproperty(:plugin) do
     desc 'The authentication plugin of the user.'
     newvalue(%r{\w+})
+
+    munge do |value|
+      value.strip.downcase
+    end
+
+    defaultto do
+      plugin_name = Facter.value(:mysqld_version).scan(%r{mariadb}i) ?  'unix_socket' : 'auth_socket'
+      @resource[:socket_authentication] == :true && @resource[:password_hash].nil? ? plugin_name : nil
+    end
   end
 
   newproperty(:max_user_connections) do
@@ -109,6 +118,15 @@ Puppet::Type.newtype(:mysql_user) do
       else
         insync == @should
       end
+    end
+  end
+
+  newproperty(:socket_authentication, boolean: true) do
+    desc 'whether to enable socket authentication plugin.'
+    newvalues(:true, :false)
+    defaultto do
+      plugin_name = Facter.value(:mysqld_version).scan(%r{mariadb}i) ? 'unix_socket' : 'auth_socket'
+      @resource[:plugin] == plugin_name ? :true : :false
     end
   end
 end
